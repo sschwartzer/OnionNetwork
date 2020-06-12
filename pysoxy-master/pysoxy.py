@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+import socks
+
 """
  Small Socks5 Proxy Server in Python
  from https://github.com/MisterDaneel/
@@ -14,6 +16,7 @@ from threading import Thread, activeCount
 from signal import signal, SIGINT, SIGTERM
 from time import sleep
 import sys
+import argparse
 
 #
 # Configuration
@@ -65,6 +68,37 @@ class ExitStatus:
         return self.exit
 
 
+def is_proxy_mode():
+    """ command line flags """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--proxy_mode", help="Proxy mode", action="store_true")
+    args = parser.parse_args()
+    if args.proxy_mode:
+        print("proxy mode is turned on")
+        return True
+    else:
+        print("onion rounter mode is turned on")
+        return False
+
+def logo():
+    print(
+          """ 
+          
+         _____       _               _   _      _                      _
+        |  _  |     (_)             | \ | |    | |                    | |
+        | | | |_ __  _  ___  _ __   |  \| | ___| |___      _____  _ __| | __
+        | | | | '_ \| |/ _ \| '_ \  | . ` |/ _ \ __\ \ /\ / / _ \| '__| |/ /
+        \ \_/ / | | | | (_) | | | | | |\  |  __/ |_ \ V  V / (_) | |  |   <
+         \___/|_| |_|_|\___/|_| |_| \_| \_/\___|\__| \_/\_/ \___/|_|  |_|\_\ 
+         
+         
+         """)
+
+
+
+
+""" p"""
+
 def error(msg="", err=None):
     """ Print exception stack trace python """
     if msg:
@@ -86,13 +120,21 @@ def proxy_loop(socket_src, socket_dst):
             continue
         try:
             for sock in reader:
-                data = sock.recv(BUFSIZE)
-                if not data:
-                    return
+                try:
+                    data = sock.recv(BUFSIZE)
+                    if not data:
+                        return
+                except ConnectionAbortedError:
+                    print("An established connection was aborted by the software in your host machine")
+                    pass
                 if sock is socket_dst:
                     socket_src.send(data)
                 else:
-                    socket_dst.send(data)
+                    try:
+                        socket_dst.send(data)
+                    except ConnectionAbortedError:
+                        print("An established connection was aborted by the software in your host machine")
+                        pass
         except socket.error as err:
             error("Loop failed", err)
             return
@@ -257,10 +299,16 @@ def subnegotiation(wrapper):
     return True
 
 
-def connection(wrapper):
+def connection(wrapper, proxy_flag):
     """ Function run by a thread """
+    # if it is in OR mode
+    if not proxy_flag:
+        wrapper.set_proxy(socks.SOCKS5, "localhost", 9050)
     if subnegotiation(wrapper):
-        request(wrapper)
+        try:
+            request(wrapper)
+        except Exception:
+            pass
 
 
 def create_socket():
@@ -303,8 +351,12 @@ def exit_handler(signum, frame):
     EXIT.set_status(True)
 
 
+
 def main():
     """ Main function """
+    logo()
+    proxy_flag = is_proxy_mode()
+
     new_socket = create_socket()
     bind_port(new_socket)
     signal(SIGINT, exit_handler)
@@ -324,7 +376,7 @@ def main():
         except TypeError:
             error()
             sys.exit(0)
-        recv_thread = Thread(target=connection, args=(wrapper, ))
+        recv_thread = Thread(target=connection, args=(wrapper, proxy_flag))
         recv_thread.start()
     new_socket.close()
 
