@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 import socks
-
+from uuid import uuid4
+import protocol
+import globals
+import pyDH
 """
  Small Socks5 Proxy Server in Python
  from https://github.com/MisterDaneel/
@@ -21,17 +24,24 @@ import argparse
 #
 # Configuration
 #
+#clients side:
 MAX_THREADS = 200
 BUFSIZE = 2048
 TIMEOUT_SOCKET = 5
 LOCAL_ADDR = '0.0.0.0'
 LOCAL_PORT = 9050
+OR1_PORT = 9054
 # Parameter to bind a socket to a device, using SO_BINDTODEVICE
 # Only root can set this option
 # If the name is an empty string or None, the interface is chosen when
 # a routing decision is made
 # OUTGOING_INTERFACE = "eth0"
 OUTGOING_INTERFACE = ""
+
+SERVER_HOST = '127.0.0.1'  # Standard loopback interface address (localhost)
+SERVER_PORT = 65432  # Port to listen on (non-privileged ports are > 1023)
+
+
 
 #
 # Constants
@@ -328,7 +338,7 @@ def bind_port(sock):
         listen for connections made to the socket
     """
     try:
-        print(f"Bind {str(LOCAL_ADDR)}, {str(LOCAL_PORT)}")
+        print('Bind {}'.format(str(LOCAL_PORT)))
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((LOCAL_ADDR, LOCAL_PORT))
     except socket.error as err:
@@ -351,16 +361,59 @@ def exit_handler(signum, frame):
     EXIT.set_status(True)
 
 
+# build a hop - CREATE / CREATED protocol functions
+def create_connection(is_proxy_mode, client_socket):
+    if is_proxy_mode:   # acts as client
+        client_socket.connect((SERVER_HOST, OR1_PORT))
+        print("the proxy client is connected")
+        circId = uuid4().bytes  # UUIDS generated number -random 16 bytes number
+        dh = globals.get_dh_client()  # create an instance of DH
+        #sending first CREATE packet
+        print("generating a CREATE packet")
+        packet = protocol.create_generating(circId, dh)
+        client_socket.sendall(packet)
+        print("the packet has been sent")
+
+        received_data = client_socket.recv(1024)
+        c, s = protocol.cell_general_packet_parsing(received_data)
+        print(f"successfully generated a shared key for circID: {circId}, the pk is {globals.get_dict(circId)}")
+
+
+    else:
+        server_socket = create_socket()
+        server_socket.bind((LOCAL_ADDR, OR1_PORT))
+        print(f"the server is binded at {LOCAL_ADDR, OR1_PORT}")
+        server_socket.listen(1)
+        (client_socket, client_address) = server_socket.accept()
+
+        data = client_socket.recv(1024)
+        # figuring out what is  the packet
+        circId, server_pubkey = protocol.cell_general_packet_parsing(data)
+        if circId == 0 or server_pubkey == 0:
+            error("connection failed")
+            return
+        packet = protocol.created_generating(circId, server_pubkey)
+        print("generated a CREATED packet")
+        client_socket.sendall(packet)
+        print(f"successfully generated a shared key for circID: {circId},\nthe key: {globals.get_dict(circId)}")
+        print("the packet has been sent")
+
+
 
 def main():
     """ Main function """
     logo()
-    proxy_flag = is_proxy_mode()
+    proxy_flag = is_proxy_mode()    #if TRUE then - proxy, else OR mode
 
     new_socket = create_socket()
-    bind_port(new_socket)
+    if proxy_flag:
+        bind_port(new_socket)
     signal(SIGINT, exit_handler)
     signal(SIGTERM, exit_handler)
+
+
+    proxy_client = create_socket()
+    create_connection(proxy_flag, proxy_client)
     while not EXIT.get_status():
         if activeCount() > MAX_THREADS:
             sleep(3)
@@ -376,6 +429,7 @@ def main():
         except TypeError:
             error()
             sys.exit(0)
+
         recv_thread = Thread(target=connection, args=(wrapper, proxy_flag))
         recv_thread.start()
     new_socket.close()
