@@ -4,6 +4,7 @@ from uuid import uuid4
 import protocol
 import globals
 import pyDH
+
 """
  Small Socks5 Proxy Server in Python
  from https://github.com/MisterDaneel/
@@ -24,13 +25,13 @@ import argparse
 #
 # Configuration
 #
-#clients side:
+# clients side:
 MAX_THREADS = 200
 BUFSIZE = 2048
 TIMEOUT_SOCKET = 5
-LOCAL_ADDR = '0.0.0.0'
-LOCAL_PORT = 9050
-OR1_PORT = 9054
+BIND_ADDR = '0.0.0.0'
+PROXY_PORT = 9050
+
 # Parameter to bind a socket to a device, using SO_BINDTODEVICE
 # Only root can set this option
 # If the name is an empty string or None, the interface is chosen when
@@ -38,10 +39,8 @@ OR1_PORT = 9054
 # OUTGOING_INTERFACE = "eth0"
 OUTGOING_INTERFACE = ""
 
-SERVER_HOST = '127.0.0.1'  # Standard loopback interface address (localhost)
-SERVER_PORT = 65432  # Port to listen on (non-privileged ports are > 1023)
-
-
+OR1_HOST = '127.0.0.1'
+OR1_PORT = 9054
 
 #
 # Constants
@@ -66,6 +65,7 @@ ATYP_DOMAINNAME = b'\x03'
 
 class ExitStatus:
     """ Manage exit status """
+
     def __init__(self):
         self.exit = False
 
@@ -78,21 +78,31 @@ class ExitStatus:
         return self.exit
 
 
-def is_proxy_mode():
+def get_params():
     """ command line flags """
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--proxy_mode", help="Proxy mode", action="store_true")
+    parser.add_argument("port", help="listening port", type=check_port)
     args = parser.parse_args()
+
     if args.proxy_mode:
         print("proxy mode is turned on")
-        return True
+        return True, args.port
     else:
-        print("onion rounter mode is turned on")
-        return False
+        print("onion router mode is turned on")
+        return False, args.port
+
+
+def check_port(value):
+    ivalue = int(value)
+    if ivalue < 1024 or ivalue > 65535:
+        raise argparse.ArgumentTypeError("%s is an invalid positive int value" % value)
+    return ivalue
+
 
 def logo():
     print(
-          """ 
+        """ 
           
          _____       _               _   _      _                      _
         |  _  |     (_)             | \ | |    | |                    | |
@@ -105,9 +115,8 @@ def logo():
          """)
 
 
-
-
 """ p"""
+
 
 def error(msg="", err=None):
     """ Print exception stack trace python """
@@ -148,6 +157,7 @@ def proxy_loop(socket_src, socket_dst):
         except socket.error as err:
             error("Loop failed", err)
             return
+
 
 def connect_to_dst(dst_addr, dst_port):
     """ Connect to desired destination """
@@ -192,7 +202,7 @@ def request_client(wrapper):
     # IPV4
     if s5_request[3:4] == ATYP_IPV4:
         dst_addr = socket.inet_ntoa(s5_request[4:-2])
-        #TODO understands the line below:
+        # TODO understands the line below:
         dst_port = unpack('>H', s5_request[8:len(s5_request)])[0]
     # DOMAIN NAME
     elif s5_request[3:4] == ATYP_DOMAINNAME:
@@ -225,6 +235,9 @@ def request(wrapper):
         returns a reply
     """
     dst = request_client(wrapper)
+    # TODO HERE:
+    # relay_generating()///
+
     # Server Reply
     # +----+-----+-------+------+----------+----------+
     # |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -236,10 +249,9 @@ def request(wrapper):
     if dst:
         socket_dst = connect_to_dst(dst[0], dst[1])
     if not dst or socket_dst == 0:
-        rep = b'\x01'   # X'01' general SOCKS server failure
+        rep = b'\x01'  # X'01' general SOCKS server failure
     else:
-        rep = b'\x00'   # X'00' succeeded
-        #TODO understands the line below:
+        rep = b'\x00'  # X'00' succeeded
         bnd = socket.inet_aton(socket_dst.getsockname()[0])
         bnd += pack(">H", socket_dst.getsockname()[1])
     reply = VER + rep + b'\x00' + ATYP_IPV4 + bnd
@@ -282,8 +294,8 @@ def subnegotiation_client(wrapper):
         return M_NOTAVAILABLE
     for method in methods:
         if method == ord(M_NOAUTH):
-            return M_NOAUTH     # X'00' NO AUTHENTICATION REQUIRED
-    return M_NOTAVAILABLE   # X'FF' NO ACCEPTABLE METHODS
+            return M_NOAUTH  # X'00' NO AUTHENTICATION REQUIRED
+    return M_NOTAVAILABLE  # X'FF' NO ACCEPTABLE METHODS
 
 
 def subnegotiation(wrapper):
@@ -309,11 +321,13 @@ def subnegotiation(wrapper):
     return True
 
 
-def connection(wrapper, proxy_flag):
+def connection(wrapper):
     """ Function run by a thread """
+    # TODO if below? relevent?
     # if it is in OR mode
     if not proxy_flag:
-        wrapper.set_proxy(socks.SOCKS5, "localhost", 9050)
+        # ????????????
+        wrapper.set_proxy(socks.SOCKS5, "localhost", PROXY_PORT)
     if subnegotiation(wrapper):
         try:
             request(wrapper)
@@ -332,15 +346,17 @@ def create_socket():
     return sock
 
 
-def bind_port(sock):
+def bind_port(sock, port):
     """
         Bind the socket to address and
         listen for connections made to the socket
     """
     try:
-        print('Bind {}'.format(str(LOCAL_PORT)))
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((LOCAL_ADDR, LOCAL_PORT))
+        print(f'Bind {port}')
+        sock.bind((BIND_ADDR, port))
+
+
     except socket.error as err:
         error("Bind failed", err)
         sock.close()
@@ -362,13 +378,14 @@ def exit_handler(signum, frame):
 
 
 # build a hop - CREATE / CREATED protocol functions
-def create_connection(is_proxy_mode, client_socket):
-    if is_proxy_mode:   # acts as client
-        client_socket.connect((SERVER_HOST, OR1_PORT))
+def shared_key_negoteation(server_socket, client_socket):
+    print(f"is proxy mode: {proxy_flag}")
+    if proxy_flag:  # acts as client
+        client_socket.connect((OR1_HOST, OR1_PORT))  # the port is the "next stop" port, not the listening one
         print("the proxy client is connected")
         circId = uuid4().bytes  # UUIDS generated number -random 16 bytes number
         dh = globals.get_dh_client()  # create an instance of DH
-        #sending first CREATE packet
+        # sending first CREATE packet
         print("generating a CREATE packet")
         packet = protocol.create_generating(circId, dh)
         client_socket.sendall(packet)
@@ -378,14 +395,13 @@ def create_connection(is_proxy_mode, client_socket):
         c, s = protocol.cell_general_packet_parsing(received_data)
         print(f"successfully generated a shared key for circID: {circId}, the pk is {globals.get_dict(circId)}")
 
-
     else:
-        server_socket = create_socket()
-        server_socket.bind((LOCAL_ADDR, OR1_PORT))
-        print(f"the server is binded at {LOCAL_ADDR, OR1_PORT}")
-        server_socket.listen(1)
-        (client_socket, client_address) = server_socket.accept()
 
+        server_socket.listen(1)
+        try:
+            (client_socket, client_address) = server_socket.accept()
+        except socket.error:
+            error()
         data = client_socket.recv(1024)
         # figuring out what is  the packet
         circId, server_pubkey = protocol.cell_general_packet_parsing(data)
@@ -399,28 +415,26 @@ def create_connection(is_proxy_mode, client_socket):
         print("the packet has been sent")
 
 
-
 def main():
     """ Main function """
     logo()
-    proxy_flag = is_proxy_mode()    #if TRUE then - proxy, else OR mode
-
+    global proxy_flag
+    proxy_flag, listening_port = get_params()  # if TRUE then - proxy, else OR mode
+    print(f"starting with parmeters: is_proxy_mode: {proxy_flag}, listening port {listening_port}")
     new_socket = create_socket()
-    if proxy_flag:
-        bind_port(new_socket)
+    bind_port(new_socket, listening_port)
     signal(SIGINT, exit_handler)
     signal(SIGTERM, exit_handler)
 
-
     proxy_client = create_socket()
-    create_connection(proxy_flag, proxy_client)
+    shared_key_negoteation(new_socket, proxy_client)
     while not EXIT.get_status():
         if activeCount() > MAX_THREADS:
             sleep(3)
             continue
         try:
-            wrapper, _ = new_socket.accept()
-            wrapper.setblocking(1)
+            src_socket, _ = new_socket.accept()  # browser's client socket
+            src_socket.setblocking(1)
         except socket.timeout:
             continue
         except socket.error:
@@ -430,7 +444,7 @@ def main():
             error()
             sys.exit(0)
 
-        recv_thread = Thread(target=connection, args=(wrapper, proxy_flag))
+        recv_thread = Thread(target=connection, args=(src_socket,))
         recv_thread.start()
     new_socket.close()
 
