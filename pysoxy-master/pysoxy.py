@@ -325,14 +325,14 @@ def connection(wrapper):
     """ Function run by a thread """
     # TODO if below? relevent?
     # if it is in OR mode
-    if not proxy_flag:
+    #if not proxy_flag:
         # ????????????
-        wrapper.set_proxy(socks.SOCKS5, "localhost", PROXY_PORT)
-    if subnegotiation(wrapper):
-        try:
+      #  wrapper.set_proxy(socks.SOCKS5, "localhost", PROXY_PORT)
+    if proxy_flag:
+        # proxy does the key exchange first
+        if subnegotiation(wrapper):
             request(wrapper)
-        except Exception:
-            pass
+    else:
 
 
 def create_socket():
@@ -420,7 +420,7 @@ def main():
     logo()
     global proxy_flag
     proxy_flag, listening_port = get_params()  # if TRUE then - proxy, else OR mode
-    print(f"starting with parmeters: is_proxy_mode: {proxy_flag}, listening port {listening_port}")
+    print(f"starting with parameters: is_proxy_mode: {proxy_flag}, listening port {listening_port}")
     new_socket = create_socket()
     bind_port(new_socket, listening_port)
     signal(SIGINT, exit_handler)
