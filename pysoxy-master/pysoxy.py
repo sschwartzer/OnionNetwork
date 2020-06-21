@@ -321,18 +321,29 @@ def subnegotiation(wrapper):
     return True
 
 
-def connection(wrapper):
+def connection(client_socket):
     """ Function run by a thread """
-    # TODO if below? relevent?
-    # if it is in OR mode
-    #if not proxy_flag:
-        # ????????????
-      #  wrapper.set_proxy(socks.SOCKS5, "localhost", PROXY_PORT)
-    if proxy_flag:
-        # proxy does the key exchange first
-        if subnegotiation(wrapper):
-            request(wrapper)
-    else:
+    if not proxy_flag:
+        #server_socket.listen(1)
+        #try:
+         #   (client_socket, client_address) = server_socket.accept()
+        #except socket.error:
+         #   error()
+        data = client_socket.recv(1024)
+        # figuring out what is  the packet
+        circId, server_pubkey = protocol.cell_general_packet_parsing(data)
+        if circId == 0 or server_pubkey == 0:
+            error("connection failed")
+            return
+        packet = protocol.created_generating(circId, server_pubkey)
+        print("generated a CREATED packet")
+        client_socket.sendall(packet)
+        print(f"successfully generated a shared key for circID: {circId},\nthe key: {globals.get_dict(circId)}")
+        print("the packet has been sent")
+
+    if subnegotiation(client_socket):
+        request(client_socket)
+
 
 
 def create_socket():
@@ -378,23 +389,21 @@ def exit_handler(signum, frame):
 
 
 # build a hop - CREATE / CREATED protocol functions
-def shared_key_negoteation(server_socket, client_socket):
-    print(f"is proxy mode: {proxy_flag}")
-    if proxy_flag:  # acts as client
-        client_socket.connect((OR1_HOST, OR1_PORT))  # the port is the "next stop" port, not the listening one
-        print("the proxy client is connected")
-        circId = uuid4().bytes  # UUIDS generated number -random 16 bytes number
-        dh = globals.get_dh_client()  # create an instance of DH
-        # sending first CREATE packet
-        print("generating a CREATE packet")
-        packet = protocol.create_generating(circId, dh)
-        client_socket.sendall(packet)
-        print("the packet has been sent")
+def proxy_shared_key_negoteation(client_socket):
+    client_socket.connect((OR1_HOST, OR1_PORT))  # the port is the "next stop" port, not the listening one
+    print("the proxy client is connected")
+    circId = uuid4().bytes  # UUIDS generated number -random 16 bytes number
+    dh = globals.get_dh_client()  # create an instance of DH
+    # sending first CREATE packet
+    print("generating a CREATE packet")
+    packet = protocol.create_generating(circId, dh)
+    client_socket.sendall(packet)
+    print("the packet has been sent")
 
-        received_data = client_socket.recv(1024)
-        c, s = protocol.cell_general_packet_parsing(received_data)
-        print(f"successfully generated a shared key for circID: {circId}, the pk is {globals.get_dict(circId)}")
-
+    received_data = client_socket.recv(1024)
+    c, s = protocol.cell_general_packet_parsing(received_data)
+    print(f"successfully generated a shared key for circID: {circId}, the pk is {globals.get_dict(circId)}")
+"""
     else:
 
         server_socket.listen(1)
@@ -414,7 +423,7 @@ def shared_key_negoteation(server_socket, client_socket):
         print(f"successfully generated a shared key for circID: {circId},\nthe key: {globals.get_dict(circId)}")
         print("the packet has been sent")
 
-
+"""
 def main():
     """ Main function """
     logo()
@@ -427,7 +436,9 @@ def main():
     signal(SIGTERM, exit_handler)
 
     proxy_client = create_socket()
-    shared_key_negoteation(new_socket, proxy_client)
+    if proxy_flag:
+        # proxy does key exchange in Main Thread
+        proxy_shared_key_negoteation(proxy_client)
     while not EXIT.get_status():
         if activeCount() > MAX_THREADS:
             sleep(3)
