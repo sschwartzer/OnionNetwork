@@ -30,16 +30,15 @@ def cell_general_packet_parsing(packet):  # dictionary
     len = int.from_bytes(packet[17:21], "big")  # 4 bytes
     payload = packet[21:21+ len + 1]
     if cmd == CREATE:  # create function
-        print("the packet is a CREATE packet")
+        print("Received CREATE packet")
         server_pubkey, shared_key = create_parsing(payload)
-        print(f"the ORIGINAL public key {shared_key}")
-        globals.add(circID, shared_key)
+        globals.add_to_circuit_id(circID, shared_key)
         return circID, server_pubkey
 
     elif cmd == CREATED:  # created function
-        print("the packet is a CREATED packet")
+        print("Received CREATED packet")
         shared_key = created_parsing(payload)  # shared key
-        globals.add(circID, shared_key)
+        globals.add_to_circuit_id(circID, shared_key)
         return 0, 0
 
 
