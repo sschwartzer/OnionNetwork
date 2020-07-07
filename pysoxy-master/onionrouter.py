@@ -4,6 +4,8 @@ from uuid import uuid4
 import protocol
 import globals
 import threading
+import encryption
+
 import pyDH
 
 """
@@ -21,6 +23,7 @@ from threading import Thread, activeCount
 from signal import signal, SIGINT, SIGTERM
 from time import sleep
 from protocol import error
+from encryption import encrypt, decrypt
 import sys
 import argparse
 
@@ -88,33 +91,18 @@ def get_params():
     args = parser.parse_args()
 
     if args.proxy_mode:
-        print("proxy mode is turned on")
+        print("Running as a PROXY")
         return True, args.port
     else:
-        print("onion router mode is turned on")
+        print("Running as an ONION ROUTER")
         return False, args.port
 
 
 def check_port(value):
     ivalue = int(value)
     if ivalue < 1024 or ivalue > 65535:
-        raise argparse.ArgumentTypeError("%s is an invalid positive int value" % value)
+        raise argparse.ArgumentTypeError("%s is an invalid port number" % value)
     return ivalue
-
-
-def logo():
-    print(
-        """ 
-          
-         _____       _               _   _      _                      _
-        |  _  |     (_)             | \ | |    | |                    | |
-        | | | |_ __  _  ___  _ __   |  \| | ___| |___      _____  _ __| | __
-        | | | | '_ \| |/ _ \| '_ \  | . ` |/ _ \ __\ \ /\ / / _ \| '__| |/ /
-        \ \_/ / | | | | (_) | | | | | |\  |  __/ |_ \ V  V / (_) | |  |   <
-         \___/|_| |_|_|\___/|_| |_| \_| \_/\___|\__| \_/\_/ \___/|_|  |_|\_\ 
-         
-         
-         """)
 
 
 def or_loop(socket_src, socket_dst):
@@ -136,6 +124,10 @@ def or_loop(socket_src, socket_dst):
                     socket_src.send(data)
                 else:
                     socket_dst.send(data)
+        except ConnectionAbortedError:
+            return
+        except ConnectionResetError:
+            return
         except socket.error as err:
             error("Loop failed", err)
             return
@@ -169,10 +161,12 @@ def request_client(wrapper):
     # +----+-----+-------+------+----------+----------+
     try:
         s5_request = wrapper.recv(BUFSIZE)
+    except ConnectionAbortedError:
+        return
     except ConnectionResetError:
         if wrapper != 0:
             wrapper.close()
-        error()
+        # error()
         return False
     # Check VER, CMD and RSV
     print(f"{threading.get_ident()} Received SOCKS packet {s5_request}")
@@ -377,7 +371,7 @@ def connection_or(proxy_socket):
 
 def main():
     """ Main function """
-    logo()
+    globals.banner()
     global proxy_flag
     proxy_flag, listening_port = get_params()  # if TRUE then - proxy, else OR mode
     print(f"starting with parameters: is_proxy_mode: {proxy_flag}, listening port {listening_port}")

@@ -4,6 +4,7 @@ from uuid import uuid4
 import protocol
 import globals
 import threading
+import encryption
 import pyDH
 
 """
@@ -21,6 +22,7 @@ from threading import Thread, activeCount
 from signal import signal, SIGINT, SIGTERM
 from time import sleep
 from protocol import error
+from encryption import encrypt, decrypt
 import sys
 import argparse
 
@@ -102,20 +104,6 @@ def check_port(value):
     return ivalue
 
 
-def banner():
-    print(
-        """ 
-
-         _____       _               _   _      _                      _
-        |  _  |     (_)             | \ | |    | |                    | |
-        | | | |_ __  _  ___  _ __   |  \| | ___| |___      _____  _ __| | __
-        | | | | '_ \| |/ _ \| '_ \  | . ` |/ _ \ __\ \ /\ / / _ \| '__| |/ /
-        \ \_/ / | | | | (_) | | | | | |\  |  __/ |_ \ V  V / (_) | |  |   <
-         \___/|_| |_|_|\___/|_| |_| \_| \_/\___|\__| \_/\_/ \___/|_|  |_|\_\ 
-
-
-         """)
-
 
 def proxy_loop(client_socket, socket_dst):
     """ Wait for network activity """
@@ -136,6 +124,10 @@ def proxy_loop(client_socket, socket_dst):
                     client_socket.send(data)
                 else:
                     socket_dst.send(data)
+        except ConnectionAbortedError:
+            return
+        except ConnectionResetError:
+            return
         except socket.error as err:
             error("Loop failed", err)
             return
@@ -164,15 +156,15 @@ def connect_to_dst(dst_addr, dst_port):
 
 def connection(client_socket):
     """ Function run by a thread """
-    client_data = client_socket.recv(BUFSIZE)
-    print(f"{threading.get_ident()} Received from client: {client_data}")
+#    client_data = client_socket.recv(BUFSIZE)
+#    print(f"{threading.get_ident()} Received from client: {client_data}")
 
     socket_to_or = create_socket()
     proxy_shared_key_negotiation(socket_to_or)
 
-    print(f"{threading.get_ident()} Sending client's data to OR: {client_data}")
+#    print(f"{threading.get_ident()} Sending client's data to OR: {client_data}")
+#    socket_to_or.sendall(client_data)
 
-    socket_to_or.sendall(client_data)
     print(f"{threading.get_ident()} Entering Proxy loop")
     proxy_loop(client_socket, socket_to_or)
 
@@ -243,10 +235,10 @@ def proxy_shared_key_negotiation(socket_to_or):
 
 def main():
     """ Main function """
-    banner()
+    globals.banner()
     global proxy_flag
     proxy_flag, listening_port = get_params()  # if TRUE then - proxy, else OR mode
-    print(f"starting with parmeters: is_proxy_mode: {proxy_flag}, listening port {listening_port}")
+    print(f"starting with parameters: is_proxy_mode: {proxy_flag}, listening port {listening_port}")
     new_socket = create_socket()
     bind_port(new_socket, listening_port)
     signal(SIGINT, exit_handler)
