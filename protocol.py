@@ -2,6 +2,7 @@ import traceback
 import pyDH
 from Crypto.Util.number import long_to_bytes
 import globals
+import threading
 
 CREATE = 1
 CREATED = 2
@@ -11,7 +12,7 @@ def error(msg="", err=None):
     """ Print exception stack trace python """
     if msg:
         traceback.print_exc()
-        print("{} - Code: {}, Message: {}".format(msg, str(err[0]), err[1]))
+        print(f"{threading.get_ident()} {msg} - Code: {str(err[0])}, Message: {err[1]}")
     else:
         traceback.print_exc()
 
@@ -30,16 +31,15 @@ def cell_general_packet_parsing(packet):  # dictionary
     len = int.from_bytes(packet[17:21], "big")  # 4 bytes
     payload = packet[21:21+ len + 1]
     if cmd == CREATE:  # create function
-        print("the packet is a CREATE packet")
+        print(f"{threading.get_ident()} Received CREATE packet")
         server_pubkey, shared_key = create_parsing(payload)
-        print(f"the ORIGINAL public key {shared_key}")
-        globals.add(circID, shared_key)
+        globals.add_to_circuit_id(circID, shared_key)
         return circID, server_pubkey
 
     elif cmd == CREATED:  # created function
-        print("the packet is a CREATED packet")
+        print(f"{threading.get_ident()} Received CREATED packet")
         shared_key = created_parsing(payload)  # shared key
-        globals.add(circID, shared_key)
+        globals.add_to_circuit_id(circID, shared_key)
         return 0, 0
 
 
@@ -56,9 +56,9 @@ def create_generating(circID, dh):
     try:
         dh_pubkey = dh.gen_public_key()  # a long
     except error:
-        error("Generating public key failed")
+        error(f"{threading.get_ident()} Generating public key failed")
         return
-    print("generated a public key")
+    print(f"{threading.get_ident()} Generated a public key")
     hdata = long_to_bytes(dh_pubkey)
     dlen = (len(hdata)).to_bytes(4, byteorder='big')
     packet = circID + cmd + dlen + hdata
@@ -129,9 +129,3 @@ def created_parsing(hdata):
         return
     return shared_key
 
-"""def main():
-
-
-if __name__ == '__main__':
-    main()
-"""
