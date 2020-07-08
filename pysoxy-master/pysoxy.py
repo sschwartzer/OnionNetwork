@@ -4,7 +4,6 @@ from uuid import uuid4
 import protocol
 import globals
 import threading
-import encryption
 import pyDH
 
 """
@@ -22,7 +21,7 @@ from threading import Thread, activeCount
 from signal import signal, SIGINT, SIGTERM
 from time import sleep
 from protocol import error
-from encryption import encrypt, decrypt
+from encryption import Enc
 import sys
 import argparse
 
@@ -31,7 +30,7 @@ import argparse
 #
 # clients side:
 MAX_THREADS = 200
-BUFSIZE = 2048
+BUFSIZE = 4096
 TIMEOUT_SOCKET = 5
 BIND_ADDR = '0.0.0.0'
 PROXY_PORT = 9050
@@ -43,7 +42,7 @@ PROXY_PORT = 9050
 # OUTGOING_INTERFACE = "eth0"
 OUTGOING_INTERFACE = ""
 
-OR1_HOST = '127.0.0.1'
+OR1_HOST = '3.134.92.235' #  '127.0.0.1'
 OR1_PORT = 9054
 
 #
@@ -104,9 +103,9 @@ def check_port(value):
     return ivalue
 
 
-
-def proxy_loop(client_socket, socket_dst):
+def proxy_loop(client_socket, socket_dst, key):
     """ Wait for network activity """
+    enc = Enc(key)
     while not EXIT.get_status():
         try:
             reader, _, _ = select.select([client_socket, socket_dst], [], [], 1)
@@ -121,9 +120,20 @@ def proxy_loop(client_socket, socket_dst):
                 if not data:
                     return
                 if sock is socket_dst:
-                    client_socket.send(data)
+                    # socket from OR - needed to be sent to client (= browser)
+                    # needed to be decryptedd
+                    print(f"{threading.get_ident()}, decrypting with key {key}")
+                    decrypted_data = enc.decrypt(data)
+                    client_socket.send(decrypted_data)
                 else:
-                    socket_dst.send(data)
+                    # socket from client, thus, needed to sent to OR
+                    # and to be encrypted
+                    print(f"{threading.get_ident()}, encrypting with key {key}")
+                    encrypted_data = enc.encrypt(data)
+                    print(f"encrypted data len {len(encrypted_data)}")
+                    socket_dst.send(encrypted_data)
+        # except TypeError:
+        #     print(f"Socket {client_socket}")
         except ConnectionAbortedError:
             return
         except ConnectionResetError:
@@ -160,13 +170,10 @@ def connection(client_socket):
 #    print(f"{threading.get_ident()} Received from client: {client_data}")
 
     socket_to_or = create_socket()
-    proxy_shared_key_negotiation(socket_to_or)
+    shared_key = proxy_shared_key_negotiation(socket_to_or)
 
-#    print(f"{threading.get_ident()} Sending client's data to OR: {client_data}")
-#    socket_to_or.sendall(client_data)
-
-    print(f"{threading.get_ident()} Entering Proxy loop")
-    proxy_loop(client_socket, socket_to_or)
+    print(f"{threading.get_ident()} Entering Proxy loop with key {shared_key}")
+    proxy_loop(client_socket, socket_to_or, shared_key)
 
 
 def create_socket():
@@ -228,9 +235,9 @@ def proxy_shared_key_negotiation(socket_to_or):
 
     # waiting to receive CONNECTED packet
     received_data = socket_to_or.recv(BUFSIZE)
-    protocol.cell_general_packet_parsing(received_data)
+    _, _, key = protocol.cell_general_packet_parsing(received_data)
     print(f"{threading.get_ident()} Successfully generated a shared key")
-    globals.set_shared_key(bytes(globals.circuit_id_to_sharedkey[circ_id], encoding='utf8'))
+    return key
 
 
 def main():

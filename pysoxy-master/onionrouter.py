@@ -1,12 +1,8 @@
 # -*- coding: utf-8 -*-
-import socks
-from uuid import uuid4
+
 import protocol
 import globals
 import threading
-import encryption
-
-import pyDH
 
 """
  Small Socks5 Proxy Server in Python
@@ -18,12 +14,11 @@ import socket
 import select
 from struct import pack, unpack
 # System
-import traceback
 from threading import Thread, activeCount
 from signal import signal, SIGINT, SIGTERM
 from time import sleep
 from protocol import error
-from encryption import encrypt, decrypt
+from encryption import Enc
 import sys
 import argparse
 
@@ -32,7 +27,7 @@ import argparse
 #
 # clients side:
 MAX_THREADS = 200
-BUFSIZE = 2048
+BUFSIZE = 4096
 TIMEOUT_SOCKET = 5
 BIND_ADDR = '0.0.0.0'
 PROXY_PORT = 9050
@@ -48,7 +43,7 @@ OR1_HOST = '127.0.0.1'
 OR1_PORT = 9054
 
 #
-# Constants
+# SOCKS5 Constants
 #
 '''Version of the protocol'''
 # PROTOCOL VERSION 5
@@ -105,7 +100,7 @@ def check_port(value):
     return ivalue
 
 
-def or_loop(socket_src, socket_dst):
+def or_loop(socket_src, socket_dst, encryptor):
     """ Wait for network activity """
     while not EXIT.get_status():
         try:
@@ -121,9 +116,22 @@ def or_loop(socket_src, socket_dst):
                 if not data:
                     return
                 if sock is socket_dst:
-                    socket_src.send(data)
+                    # socket from DST - needed to be sent to proxy
+                    # needed to be encrypted
+
+                    # print(f"{threading.get_ident()}, encrypting with key {key}")
+                    encrypted_data = encryptor.encrypt(data)
+                    print(f"encrypted data len {len(encrypted_data)}")
+                    #print(f"{threading.get_ident()}, key {encryptor.key}, original {data}\nencrypted msg {encrypted_data}")
+                    socket_src.send(encrypted_data)
                 else:
-                    socket_dst.send(data)
+                    # socket from proxy - needed to be sent to DST
+                    # needed to be decrypted
+                    print(f"{threading.get_ident()}, decrypting with key {encryptor.key}")
+                    decrypted_data = encryptor.decrypt(data)
+                    # print(f"{threading.get_ident()}, key {key}, encrypted {data}\ndecrypted msg {decrypted_data}")
+
+                    socket_dst.send(decrypted_data)
         except ConnectionAbortedError:
             return
         except ConnectionResetError:
@@ -154,13 +162,14 @@ def connect_to_dst(dst_addr, dst_port):
         return 0
 
 
-def request_client(wrapper):
+def request_client(wrapper, encryptor):
     """ Client request details """
     # +----+-----+-------+------+----------+----------+
     # |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
     # +----+-----+-------+------+----------+----------+
     try:
-        s5_request = wrapper.recv(BUFSIZE)
+        encrypted_request = wrapper.recv(BUFSIZE)
+        s5_request = encryptor.decrypt(encrypted_request)
     except ConnectionAbortedError:
         return
     except ConnectionResetError:
@@ -205,14 +214,14 @@ def request_client(wrapper):
     return (dst_addr, dst_port)
 
 
-def request(wrapper):
+def request(wrapper, encryptor):
     """
         The SOCKS request information is sent by the client as soon as it has
         established a connection to the SOCKS server, and completed the
         authentication negotiations.  The server evaluates the request, and
         returns a reply
     """
-    dst = request_client(wrapper)
+    dst = request_client(wrapper, encryptor)
     if not dst:
         return False
     # TODO HERE:
@@ -236,22 +245,23 @@ def request(wrapper):
         bnd += pack(">H", socket_dst.getsockname()[1])
     reply = VER + rep + b'\x00' + ATYP_IPV4 + bnd
     try:
-        wrapper.sendall(reply)
+        encrypted_reply = encryptor.encrypt(reply)
+        wrapper.sendall(encrypted_reply)
     except socket.error:
         if wrapper != 0:
             wrapper.close()
         return
     # start proxy
     if rep == b'\x00':  # X'00' succeeded
-        print(f"{threading.get_ident()} Entering loop")
-        or_loop(wrapper, socket_dst)
+        print(f"{threading.get_ident()} Entering loop with key {encryptor.key}")
+        or_loop(wrapper, socket_dst, encryptor)
     if wrapper != 0:
         wrapper.close()
     if socket_dst != 0:
         socket_dst.close()
 
 
-def subnegotiation_client(wrapper):
+def subnegotiation_client(wrapper, encryptor):
     """
         The client connects to the server, and sends a version
         identifier/method selection message
@@ -261,7 +271,9 @@ def subnegotiation_client(wrapper):
     # | VER | NMETHODS | METHODS  |
     # +----+----------+----------+
     try:
-        identification_packet = wrapper.recv(BUFSIZE)
+        encrypted_data = wrapper.recv(BUFSIZE)
+        identification_packet = encryptor.decrypt(encrypted_data)
+
     except socket.error:
         error()
         return M_NOTAVAILABLE
@@ -279,14 +291,14 @@ def subnegotiation_client(wrapper):
     return M_NOTAVAILABLE  # X'FF' NO ACCEPTABLE METHODS
 
 
-def subnegotiation(wrapper):
+def subnegotiation(wrapper, encryptor):
     """
         The client connects to the server, and sends a version
         identifier/method selection message
         The server selects from one of the methods given in METHODS, and
         sends a METHOD selection message
     """
-    method = subnegotiation_client(wrapper)
+    method = subnegotiation_client(wrapper, encryptor)
     # Server Method selection message
     # +----+--------+
     # |VER | METHOD |
@@ -295,7 +307,8 @@ def subnegotiation(wrapper):
         return False
     reply = VER + method
     try:
-        wrapper.sendall(reply)
+        encrypted_reply = encryptor.encrypt(reply)
+        wrapper.sendall(encrypted_reply)
         print(f"{threading.get_ident()} Subnegotiation complete, returning response {reply}")
     except socket.error:
         error()
@@ -305,9 +318,10 @@ def subnegotiation(wrapper):
 
 def connection(proxy_socket):
     """ Function run by a thread """
-    connection_or(proxy_socket)
-    if subnegotiation(proxy_socket):
-        request(proxy_socket)
+    shared_key = connection_or(proxy_socket)
+    encryptor = Enc(shared_key)
+    if subnegotiation(proxy_socket, encryptor):
+        request(proxy_socket, encryptor)
 
 
 def create_socket():
@@ -355,8 +369,8 @@ def exit_handler(signum, frame):
 def connection_or(proxy_socket):
     data = proxy_socket.recv(BUFSIZE)
     # figuring out what is  the packet
-    print(f"{threading.get_ident()} Received First request")
-    circ_id, server_pubkey = protocol.cell_general_packet_parsing(data)
+    print(f"{threading.get_ident()} Received First request: {data}")
+    circ_id, server_pubkey, key = protocol.cell_general_packet_parsing(data)
 
     if circ_id == 0 or server_pubkey == 0:
         error(f"{threading.get_ident()} ERROR Connection failed from {proxy_socket}")
@@ -366,8 +380,9 @@ def connection_or(proxy_socket):
     packet = protocol.created_generating(circ_id, server_pubkey)
     proxy_socket.sendall(packet)
     print(f"{threading.get_ident()} Sent a CREATED packet")
-    globals.set_shared_key(bytes(globals.circuit_id_to_sharedkey[circ_id], encoding='utf8'))
-
+    #globals.set_shared_key(bytes(globals.circuit_id_to_sharedkey[circ_id], encoding='utf8'))
+    #key = bytes(globals.circuit_id_to_sharedkey[circ_id], encoding='utf8')[0:32]
+    return key
 
 def main():
     """ Main function """

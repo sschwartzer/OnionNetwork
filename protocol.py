@@ -17,7 +17,7 @@ def error(msg="", err=None):
         traceback.print_exc()
 
 
-def cell_general_packet_parsing(packet):  # dictionary
+def cell_general_packet_parsing(packet):
     """
     generating the Cell packet by the protocol
 
@@ -25,7 +25,7 @@ def cell_general_packet_parsing(packet):  # dictionary
       |CircID | CMD |  LEN  | Payload |
       +-------+-----+-------+---------+
     """
-    circID = packet[0:16]  # 16 bytes
+    circ_id = packet[0:16]  # 16 bytes
     cmd = int.from_bytes(packet[16:17], "big")  # 1 byte
 
     len = int.from_bytes(packet[17:21], "big")  # 4 bytes
@@ -33,14 +33,13 @@ def cell_general_packet_parsing(packet):  # dictionary
     if cmd == CREATE:  # create function
         print(f"{threading.get_ident()} Received CREATE packet")
         server_pubkey, shared_key = create_parsing(payload)
-        globals.add_to_circuit_id(circID, shared_key)
-        return circID, server_pubkey
-
+        print(f"{threading.get_ident()} Generated shared key: {shared_key}")
+        return circ_id, server_pubkey, bytes('d6dc4efac7cf922479998435c0ee180c', encoding='utf8') # [0:32] # 'd6dc4efac7cf922479998435c0ee180c'
     elif cmd == CREATED:  # created function
         print(f"{threading.get_ident()} Received CREATED packet")
         shared_key = created_parsing(payload)  # shared key
-        globals.add_to_circuit_id(circID, shared_key)
-        return 0, 0
+        print(f"{threading.get_ident()} Generated shared key: {shared_key}")
+        return 0, 0, bytes('d6dc4efac7cf922479998435c0ee180c', encoding='utf8') # [0:32]   # bytes(shared_key, encoding='utf8')[0:32]
 
 
 def create_generating(circID, dh):
